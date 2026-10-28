@@ -48,9 +48,11 @@ class UploaderService:
 
     async def run_forever(self) -> None:
         cleanup_stale_temp_dirs(self.settings.src_videos_dir)
+        session_path = Path("data") / "telegram_uploader"
+        session_path.parent.mkdir(parents=True, exist_ok=True)
         proxy = (ProxyType.SOCKS5, "127.0.0.1", 9050, None, None, True)
         client = DiagnosticTelegramClient(
-            str(Path("data") / "telegram_uploader"),
+            str(session_path),
             self.settings.api_id,
             self.settings.api_hash,
             proxy=proxy,

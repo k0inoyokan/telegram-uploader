@@ -1,56 +1,80 @@
-# Telegram Video Uploader
+# Загрузчик видео в Telegram
 
-An unattended Telegram userbot that scans a mounted video directory, prepares files as H.264/AAC MP4, uploads them to the General forum topic, copies each post into a configured topic, and archives successfully uploaded originals beside their source files.
+Автоматический юзербот Telegram сканирует указанную папку с видео, подготавливает файлы в формате MP4 с кодеками H.264/AAC, загружает их в общую тему форума, копирует каждую публикацию в заданную тему и перемещает успешно загруженные оригиналы в архив рядом с исходными файлами.
 
-## Requirements
+## Требования
 
-- Docker Engine and Docker Compose
-- A running Tor container named `tor`, with its SOCKS5 listener available at `127.0.0.1:9050`
-- Telegram API credentials from <https://my.telegram.org>
-- A Telegram account that can post in the target group and its topics
+- Ubuntu с Python 3.10 или новее, пакетами `python3-venv` и FFmpeg
+- SOCKS5-прокси, доступный в Ubuntu по адресу `127.0.0.1:9050`
+- Учётные данные Telegram API с сайта <https://my.telegram.org>
+- Аккаунт Telegram с правом публикации в целевой группе и её темах
 
-The uploader shares the network namespace of the existing `tor` container. Start Tor before starting the uploader. Since both containers share localhost, Tor must listen on port `9050` in that namespace.
+Загрузчик запускается непосредственно в Ubuntu, Docker не требуется. Он подключается к локальному SOCKS5-прокси по адресу `127.0.0.1:9050`. Запустите прокси до загрузчика: прокси должен принимать локальные подключения на порту `9050`.
 
-## Configuration
+## Настройка
 
-Copy `.env.example` to `.env` and set:
+Скопируйте `.env.example` в `.env` и задайте значения:
 
-- `API_ID` and `API_HASH`: Telegram application credentials
-- `CHAT_ID`: numeric group ID, for example `-1001234567890`
-- `THREAD_ID`: set to `1` for the General topic
-- `FORWARD_THREAD_ID`: destination topic ID in the same group
-- `SRC_VIDEOS_DIR`: absolute path to the host video directory; on Windows, prefer forward slashes, for example `C:/Users/name/Videos`
+- `API_ID` и `API_HASH` — учётные данные приложения Telegram
+- `CHAT_ID` — числовой идентификатор группы, например `-1001234567890`
+- `THREAD_ID` — укажите `1` для общей темы
+- `FORWARD_THREAD_ID` — идентификатор целевой темы в той же группе
+- `SRC_VIDEOS_DIR` — абсолютный путь к папке с видео в Ubuntu
 
-The host path is mounted at `/app/videos` inside the container. Originals are moved to `uploaded_archive` inside each source folder after every part has been uploaded and copied. Temporary media is created under `tmp_chunks` and removed when processing completes or fails. Leftovers from an abrupt container stop are cleared at the next startup. The `data` mount stores the Telethon login session.
+После загрузки и копирования всех частей оригинал перемещается в папку `uploaded_archive` внутри исходной папки. Временные файлы создаются в `tmp_chunks` и удаляются после успешной обработки или при ошибке. Если программа завершилась аварийно, оставшиеся временные файлы будут удалены при следующем запуске. В папке `data` хранится сессия Telethon. Не удаляйте её, если не хотите проходить вход повторно, и не предоставляйте к ней доступ посторонним.
 
-## Run
+## Запуск в Ubuntu под Termux/Proot
 
-On first startup, run in the foreground so Telethon can request the account phone number and login code:
+В окружении Ubuntu под Proot установите системные пакеты и создайте виртуальное окружение. Обычно сессии Proot запускаются от имени root, поэтому `sudo` не нужен:
 
-```sh
-docker compose up --build
+```bash
+apt update
+apt install -y python3 python3-venv ffmpeg tmux
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+cp -n .env.example .env
 ```
 
-After the session has been created in `data`, stop the foreground process and run it in the background:
+Укажите в `.env` параметры Telegram и путь к видео, видимый из Proot. Убедитесь, что у загрузчика есть права на чтение видео и запись в папку проекта. Запустите SOCKS5-прокси и проверьте, что из Proot он доступен по адресу `127.0.0.1:9050`.
 
-```sh
-docker compose up -d
-docker compose logs -f uploader
+При первом запуске запустите загрузчик в переднем плане: Telethon запросит номер телефона и код входа:
+
+```bash
+.venv/bin/python -u -m uploader
 ```
 
-The service scans after startup and then every 600 seconds. It retries files that fail on a later scan. Stop it with `docker compose down`.
+После успешного входа остановите процесс сочетанием `Ctrl+C`. Сохранённая сессия `data/telegram_uploader.session` позволит запускать программу в дальнейшем без повторного входа.
 
-## Processing behavior
+### Работа в фоне через tmux
 
-- Scans recursively and sorts video paths alphabetically, ignoring `uploaded_archive` and `tmp_chunks` directories.
-- Leaves H.264 MP4 files unchanged, remuxes H.264 in other containers, and transcodes other video codecs with libx264 CRF 22 / fast preset and AAC 128 kbit/s.
-- Splits outputs above 3.9 GiB using stream copy. Each produced segment is checked against the size limit; segment duration is reduced and retried if any segment is too large.
-- Uploads to `THREAD_ID`, then sends the returned Telegram media as a new message in `FORWARD_THREAD_ID` so the copied post has no forward attribution.
-- Archives the original only after every upload and topic copy succeeds.
+В Proot нет systemd. Чтобы загрузчик продолжал работать после выхода из терминала, используйте `tmux`:
 
-The account must be eligible to upload files of this size. Telegram limits and account eligibility may change independently of this application.
+```bash
+tmux new -s uploader
+.venv/bin/python -u -m uploader
+```
 
-## Local tests
+Чтобы отключиться от сессии, не останавливая загрузчик, нажмите `Ctrl+B`, затем `D`. Вернуться в сессию и посмотреть вывод можно командой `tmux attach -t uploader`. Чтобы остановить программу, подключитесь к сессии, нажмите `Ctrl+C`, затем выйдите из оболочки tmux.
+
+`tmux` сохраняет процесс после выхода из терминала, однако Android всё равно может остановить Termux или Proot для экономии заряда. Разрешите Termux работу в фоне в настройках энергосбережения Android. Это не гарантирует, что Android не завершит приложение. После перезапуска Proot сначала запускайте SOCKS5-прокси, затем загрузчик.
+
+Загрузчик выполняет сканирование при запуске, а затем каждые 600 секунд. Файлы, обработка которых завершилась ошибкой, будут повторно проверены при следующем сканировании.
+
+## Docker (необязательно)
+
+Поддержка Docker сохранена для уже существующих установок. Используется файл `docker-compose.yml`; ожидается, что контейнер Tor с именем `tor` будет делить сетевое пространство имён с загрузчиком. Для запуска непосредственно в Ubuntu используйте инструкции выше.
+
+## Обработка файлов
+
+- Рекурсивно сканирует папки и сортирует видео по алфавиту, пропуская каталоги `uploaded_archive` и `tmp_chunks`.
+- Не изменяет MP4-файлы с H.264, перемещает потоки H.264 в контейнер MP4 без перекодирования, а видео с другими кодеками перекодирует в H.264/AAC (libx264, CRF 22, пресет `fast`, AAC 128 кбит/с).
+- Разбивает файлы размером более 3,9 ГиБ на части без перекодирования. Размер каждой части проверяется; если часть превышает лимит, длительность сегментов уменьшается и разбиение повторяется.
+- Сначала загружает видео в тему `THREAD_ID`, затем отправляет полученное медиа новым сообщением в `FORWARD_THREAD_ID`, чтобы копия публикации не содержала отметку о пересылке.
+- Перемещает оригинал в архив, только если все части загружены и скопированы в целевую тему.
+
+Аккаунт должен иметь возможность загружать файлы такого размера. Ограничения Telegram и доступность этой возможности для аккаунта могут меняться независимо от программы.
+
+## Локальный запуск тестов
 
 ```sh
 python3 -m unittest discover -s tests -v
