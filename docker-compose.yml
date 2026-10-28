@@ -1,0 +1,17 @@
+services:
+  uploader:
+    build: .
+    image: telegram-uploader
+    container_name: uploader
+    network_mode: "container:tor"
+    restart: on-failure:5
+    tty: true
+    stdin_open: true
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      SRC_VIDEOS_DIR: /app/videos
+    volumes:
+      - "${SRC_VIDEOS_DIR}:/app/videos"
+      - "./data:/app/data"
